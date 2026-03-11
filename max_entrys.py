@@ -2,35 +2,44 @@ import asyncio
 import csv
 import os
 import re
+import threading
 from collections import deque
 from datetime import datetime
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
 from telethon import TelegramClient, events
 
 # =========================================================
-# CONFIG
+# CONFIG DESDE ENV
 # =========================================================
-api_id = 35624393
-api_hash = "0405f4fc5638f029319e213b13974776"
+api_id = int(os.environ["API_ID"])
+api_hash = os.environ["API_HASH"]
 
+source_group = int(os.environ["SOURCE_GROUP"])
+target_chat_raw = os.environ["TARGET_CHAT"]
 
-source_group = -1002947363037
-target_chat =  -1002847668460
+# TARGET_CHAT puede ser número o "me" o username
+try:
+    target_chat = int(target_chat_raw)
+except ValueError:
+    target_chat = target_chat_raw
 
+session_name = os.environ.get("SESSION_NAME", "quant_max_entries_session")
 
-session_name = "quant_max_entries_session"
-
-MAX_HISTORY = 120
+MAX_HISTORY = int(os.environ.get("MAX_HISTORY", "120"))
 
 # PAYOUT
-GAIN = 500
-LOSS = -1000
+GAIN = int(os.environ.get("GAIN", "500"))
+LOSS = int(os.environ.get("LOSS", "-1000"))
 
-# RR - más agresivo
-MAX_RR_ENTRIES = 4
+# RR
+MAX_RR_ENTRIES = int(os.environ.get("MAX_RR_ENTRIES", "4"))
 
-# MOMENTUM - más agresivo
-MOMENTUM_TRIGGER = 9
-MAX_MOMENTUM_ENTRIES_PER_STREAK = 5
+# MOMENTUM
+MOMENTUM_TRIGGER = int(os.environ.get("MOMENTUM_TRIGGER", "9"))
+MAX_MOMENTUM_ENTRIES_PER_STREAK = int(
+    os.environ.get("MAX_MOMENTUM_ENTRIES_PER_STREAK", "5")
+)
 
 # PATTERNS
 PREMIUM_PATTERNS = {
@@ -45,12 +54,32 @@ MODERATE_PATTERNS = {
     "RG", "RGG", "GRG", "RRGG", "RGR", "RGGR", "GRR", "RGRG", "RGRGG"
 }
 
-STATE_FILE = "quant_max_entries_state.txt"
-LOG_FILE = "quant_max_entries_log.csv"
+STATE_FILE = os.environ.get("STATE_FILE", "quant_max_entries_state.txt")
+LOG_FILE = os.environ.get("LOG_FILE", "quant_max_entries_log.csv")
 
 GREEN_RE = re.compile(r"\bGREEN\b", re.IGNORECASE)
 RED_RE = re.compile(r"\bRED\b", re.IGNORECASE)
 MULT_RE = re.compile(r"Resultado:\s*([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
+
+# =========================================================
+# HEALTH SERVER PARA RAILWAY
+# =========================================================
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+    def log_message(self, format, *args):
+        return
+
+
+def run_health_server():
+    port = int(os.environ.get("PORT", "8080"))
+    server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    print(f"Health server escuchando en puerto {port}")
+    server.serve_forever()
+
 
 # =========================================================
 # CLIENT
@@ -459,13 +488,19 @@ async def main():
     ensure_log_file()
     load_state()
 
-    await client.start()
-    print("Motor MAX ENTRIES escuchando...")
-    print(f"RR activo: {rr_active}, step: {rr_entry_step}, pending: {rr_pending_trade}")
-    print(f"Green streak: {green_streak}, Momentum used: {momentum_entries_used}, pending: {momentum_pending_trade}")
-    print(f"Pattern pending: {pattern_pending_trade}, pattern: {pattern_pending_name}, level: {pattern_pending_level}")
-    print("Solo notificará cuando toque ENTRAR.")
-    await client.run_until_disconnected()
+    threading.Thread(target=run_health_server, daemon=True).start()
+
+    try:
+        await client.start()
+        print("Motor MAX ENTRIES escuchando...")
+        print(f"RR activo: {rr_active}, step: {rr_entry_step}, pending: {rr_pending_trade}")
+        print(f"Green streak: {green_streak}, Momentum used: {momentum_entries_used}, pending: {momentum_pending_trade}")
+        print(f"Pattern pending: {pattern_pending_trade}, pattern: {pattern_pending_name}, level: {pattern_pending_level}")
+        print("Solo notificará cuando toque ENTRAR.")
+        await client.run_until_disconnected()
+    except Exception as e:
+        print(f"ERROR FATAL: {repr(e)}")
+        raise
 
 
 if __name__ == "__main__":
