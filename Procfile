@@ -1,1 +1,1 @@
-worker: python newred_alert.py
+worker: python max_entrys.py
